@@ -23,6 +23,10 @@ var RSSSources = []RSSSource{
 	{Name: "BBC Politics", URL: "https://feeds.bbci.co.uk/news/politics/rss.xml", Category: "politics"},
 	{Name: "ESPN", URL: "https://www.espn.com/espn/rss/news", Category: "sports-and-entertainment"},
 	{Name: "Al Jazeera", URL: "https://www.aljazeera.com/xml/rss/all.xml", Category: "world"},
+	// Indian news sources — high priority for India-centric reporting
+	{Name: "Times of India", URL: "https://timesofindia.indiatimes.com/rssfeedstopstories.cms", Category: "general"},
+	{Name: "NDTV", URL: "https://feeds.feedburner.com/ndtvnews-latest", Category: "general"},
+	{Name: "The Hindu", URL: "https://www.thehindu.com/news/feeder/default.rss", Category: "general"},
 }
 
 type Fetcher struct {
