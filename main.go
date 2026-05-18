@@ -131,22 +131,63 @@ func runScrape(
 		log.Printf("  %d. %s (score: %d)", i+1, item.Title, item.Score)
 	}
 
-	// Navbar category slugs in display order — each gets 2 articles (7 × 2 = 14, 15th → 1st category)
-	navbarCategorySlugs := []string{
-		"general",
-		"politics",
-		"science-and-technology",
-		"sports-and-entertainment",
-		"business",
-		"world",
-		"defence",
+	// Step 3: Categorize each scored article by content, group by category
+	navbarSlugs := []string{"general", "politics", "science-and-technology", "sports-and-entertainment", "business", "world", "defence"}
+
+	type scoredCat struct {
+		item ScoredItem
+		slug string
+	}
+	catGroups := map[string][]ScoredItem{}
+	for _, si := range scoredItems {
+		slug := processor.CategorizeByContent(si.Title, si.Description, si.Source)
+		catGroups[slug] = append(catGroups[slug], si)
+	}
+
+	// Step 4: Pick top 2 per category (already sorted by score desc)
+	var toProcess []scoredCat
+	for _, slug := range navbarSlugs {
+		group := catGroups[slug]
+		for k := 0; k < len(group) && k < 2; k++ {
+			toProcess = append(toProcess, scoredCat{item: group[k], slug: slug})
+		}
+	}
+
+	// Step 5: Fill up to 15 from highest-scored remaining articles
+	remaining := []ScoredItem{}
+	for _, slug := range navbarSlugs {
+		group := catGroups[slug]
+		for k := 2; k < len(group); k++ {
+			remaining = append(remaining, group[k])
+		}
+	}
+	// Sort remaining by score descending
+	for i := 0; i < len(remaining)-1; i++ {
+		for j := i + 1; j < len(remaining); j++ {
+			if remaining[j].Score > remaining[i].Score {
+				remaining[i], remaining[j] = remaining[j], remaining[i]
+			}
+		}
+	}
+	for _, r := range remaining {
+		if len(toProcess) >= 15 {
+			break
+		}
+		slug := processor.CategorizeByContent(r.Title, r.Description, r.Source)
+		toProcess = append(toProcess, scoredCat{item: r, slug: slug})
+	}
+
+	log.Printf("Selected %d articles across categories", len(toProcess))
+	for _, ci := range toProcess {
+		log.Printf("  [%s] %s (score: %d)", ci.slug, ci.item.Title, ci.item.Score)
 	}
 
 	created := 0
 	skipped := 0
 
-	for i, item := range scoredItems {
-		log.Printf("[%d/%d] Processing: %s", i+1, len(scoredItems), item.Title)
+	for i, ci := range toProcess {
+		item := ci.item
+		log.Printf("[%d/%d] [%s] Processing: %s", i+1, len(toProcess), ci.slug, item.Title)
 
 		summary, err := summarizer.GenerateSummary(item.Title, item.Description, item.Source)
 		if err != nil {
@@ -168,9 +209,7 @@ func runScrape(
 			coverImage = imageUploader.SearchAndUploadImage(item.Title)
 		}
 
-		// Round-robin: assign 2 articles per navbar category
-		categoryIndex := (i / 2) % len(navbarCategorySlugs)
-		categoryID := catMapper.GetCategoryIDFromSlug(navbarCategorySlugs[categoryIndex])
+		categoryID := catMapper.GetCategoryIDFromSlug(ci.slug)
 		if categoryID == "" {
 			categoryID = catMapper.GetCategoryIDFromSlug("general")
 		}
