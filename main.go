@@ -353,7 +353,33 @@ func calculateArticleScore(item models.RSSItem) int {
 	title := strings.ToLower(item.Title)
 	source := strings.ToLower(item.Source)
 
-	// High trending keywords boost score
+	// India-first keywords — highest priority
+	indiaKeywords := []string{
+		"india", "indian", "delhi", "mumbai", "new delhi",
+		"bharat", "modi", "narendra modi", "parliament india",
+		"supreme court india", "rbi", "rupee", "bse", "nse",
+		"bengaluru", "bangalore", "kerala", "tamil nadu",
+		"uttar pradesh", "gujarat", "rajasthan", "maharastra",
+		"west bengal", "punjab", "haryana", "kashmir",
+		"jammu", "himachal", "uttarakhand", "assam", "bihar",
+		"hyderabad", "chennai", "kolkata", "ahmedabad",
+		"pune", "jaipur", "lucknow", "chandigarh",
+		"times of india", "indian express", "the hindu",
+		"hindustan times", "ndtv", "india today",
+		"aaj tak", "zee news", "republic tv",
+		"ipl", "cricket india", "team india", "bcci",
+		"isro", "chandrayaan", "mangalyaan", "gaganyaan",
+		"make in india", "digital india", "ayushman bharat",
+		"gst", "aadhaar", "upi", "paytm",
+	}
+
+	for _, kw := range indiaKeywords {
+		if strings.Contains(title, kw) || strings.Contains(source, kw) {
+			score += 30 // high boost — India gets priority
+		}
+	}
+
+	// International trending keywords boost score
 	trendingKeywords := []string{
 		"trump", "iran", "war", "breaking", "major",
 		"election", "climate", "economy", "stock",
