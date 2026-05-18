@@ -64,7 +64,7 @@ func main() {
 	log.Printf("  - Schedule Interval: %d minutes", cfg.ScheduleIntervalMinutes)
 	log.Printf("  - Groq API: %s", boolToYesNo(cfg.GroqAPIKey != ""))
 	log.Printf("  - Cloudinary: %s", boolToYesNo(cfg.CloudinaryURL != ""))
-	log.Printf("  - Max Articles per run: 15", cfg.APIBaseURL)
+	log.Printf("  - Max Articles per run: 24", cfg.APIBaseURL)
 	log.Printf("  - Pixabay: %s", boolToYesNo(cfg.PixabayAPIKey != ""))
 
 	log.Println("========================================")
@@ -122,11 +122,17 @@ func runScrape(
 	}
 	log.Printf("After dedup: %d new articles", len(newItems))
 
-	// Step 2: AI Scores and picks top 15
-	log.Println("AI analyzing and selecting best 15 articles...")
+	// Step 2: AI Scores and ranks articles
+	log.Println("AI analyzing articles to select the best candidates...")
 	scoredItems := rankAndSelectArticles(newItems, summarizer)
+	// Keep a larger pool (up to 50 scored & sorted) so every category gets a chance
+	poolSize := len(scoredItems)
+	if poolSize > 50 {
+		poolSize = 50
+	}
+	scoredItems = scoredItems[:poolSize]
 
-	log.Printf("AI selected top %d articles based on trending potential", len(scoredItems))
+	log.Printf("AI scored and ranked %d articles (keeping pool of %d for category distribution)", len(scoredItems), poolSize)
 	for i, item := range scoredItems {
 		log.Printf("  %d. %s (score: %d)", i+1, item.Title, item.Score)
 	}
@@ -144,37 +150,50 @@ func runScrape(
 		catGroups[slug] = append(catGroups[slug], si)
 	}
 
-	// Step 4: Pick top 2 per category (already sorted by score desc)
 	var toProcess []scoredCat
-	for _, slug := range navbarSlugs {
-		group := catGroups[slug]
-		for k := 0; k < len(group) && k < 2; k++ {
-			toProcess = append(toProcess, scoredCat{item: group[k], slug: slug})
-		}
-	}
+	picked := map[string]bool{} // keyed by Link
 
-	// Step 5: Fill up to 15 from highest-scored remaining articles
-	remaining := []ScoredItem{}
+	// Round 1: pick 1 best article from each navbar category (guarantees coverage)
 	for _, slug := range navbarSlugs {
 		group := catGroups[slug]
-		for k := 2; k < len(group); k++ {
-			remaining = append(remaining, group[k])
-		}
-	}
-	// Sort remaining by score descending
-	for i := 0; i < len(remaining)-1; i++ {
-		for j := i + 1; j < len(remaining); j++ {
-			if remaining[j].Score > remaining[i].Score {
-				remaining[i], remaining[j] = remaining[j], remaining[i]
+		for k := 0; k < len(group); k++ {
+			if !picked[group[k].Link] {
+				picked[group[k].Link] = true
+				toProcess = append(toProcess, scoredCat{item: group[k], slug: slug})
+				break
 			}
 		}
 	}
-	for _, r := range remaining {
-		if len(toProcess) >= 15 {
+
+	// Round 2: pick 2 more from each category (total 3 per category = 21)
+	for _, slug := range navbarSlugs {
+		group := catGroups[slug]
+		taken := 0
+		for k := 0; k < len(group) && taken < 2; k++ {
+			if !picked[group[k].Link] {
+				picked[group[k].Link] = true
+				toProcess = append(toProcess, scoredCat{item: group[k], slug: slug})
+				taken++
+			}
+		}
+	}
+
+	// Round 3: fill up to 24 with best remaining scored articles
+	for _, si := range scoredItems {
+		if len(toProcess) >= 24 {
 			break
 		}
-		slug := processor.CategorizeByContent(r.Title, r.Description, r.Source)
-		toProcess = append(toProcess, scoredCat{item: r, slug: slug})
+		if picked[si.Link] {
+			continue
+		}
+		picked[si.Link] = true
+		slug := processor.CategorizeByContent(si.Title, si.Description, si.Source)
+		toProcess = append(toProcess, scoredCat{item: si, slug: slug})
+	}
+
+	log.Printf("Selected %d articles across categories", len(toProcess))
+	for _, ci := range toProcess {
+		log.Printf("  [%s] %s (score: %d)", ci.slug, ci.item.Title, ci.item.Score)
 	}
 
 	log.Printf("Selected %d articles across categories", len(toProcess))
@@ -259,11 +278,11 @@ type ScoredItem struct {
 	Score int
 }
 
-// rankAndSelectArticles uses AI to score and select top articles
+// rankAndSelectArticles uses AI to score and select top articles (keeps up to 50 for category distribution)
 func rankAndSelectArticles(items []models.RSSItem, summarizer *summarizer.GroqClient) []ScoredItem {
 	// If no Groq, use simple scoring
 	if summarizer == nil {
-		return simpleScore(items, 15)
+		return simpleScore(items, 24)
 	}
 
 	var scoredItems []ScoredItem
@@ -295,12 +314,36 @@ func rankAndSelectArticles(items []models.RSSItem, summarizer *summarizer.GroqCl
 		}
 	}
 
-	// Return top 15
-	if len(scoredItems) > 15 {
-		scoredItems = scoredItems[:15]
+	// Return top 50 for category distribution (will be trimmed after ensuring 1 per category)
+	if len(scoredItems) > 50 {
+		scoredItems = scoredItems[:50]
 	}
 
 	return scoredItems
+}
+
+// simpleScore for when AI is not available
+func simpleScore(items []models.RSSItem, limit int) []ScoredItem {
+	var scored []ScoredItem
+	for _, item := range items {
+		score := calculateArticleScore(item)
+		scored = append(scored, ScoredItem{RSSItem: item, Score: score})
+	}
+
+	// Sort
+	for i := 0; i < len(scored)-1; i++ {
+		for j := i + 1; j < len(scored); j++ {
+			if scored[j].Score > scored[i].Score {
+				scored[i], scored[j] = scored[j], scored[i]
+			}
+		}
+	}
+
+	if len(scored) > limit {
+		scored = scored[:limit]
+	}
+
+	return scored
 }
 
 // calculateArticleScore scores articles based on trending potential
@@ -353,30 +396,6 @@ func calculateArticleScore(item models.RSSItem) int {
 	}
 
 	return score
-}
-
-// simpleScore for when AI is not available
-func simpleScore(items []models.RSSItem, limit int) []ScoredItem {
-	var scored []ScoredItem
-	for _, item := range items {
-		score := calculateArticleScore(item)
-		scored = append(scored, ScoredItem{RSSItem: item, Score: score})
-	}
-
-	// Sort
-	for i := 0; i < len(scored)-1; i++ {
-		for j := i + 1; j < len(scored); j++ {
-			if scored[j].Score > scored[i].Score {
-				scored[i], scored[j] = scored[j], scored[i]
-			}
-		}
-	}
-
-	if len(scored) > limit {
-		scored = scored[:limit]
-	}
-
-	return scored
 }
 
 func validateConfig(cfg *config.Config) error {
