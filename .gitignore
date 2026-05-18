@@ -1,0 +1,5 @@
+.env
+article_tracker.json
+*.exe
+*.log
+tmp/
