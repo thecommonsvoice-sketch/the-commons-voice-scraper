@@ -131,6 +131,17 @@ func runScrape(
 		log.Printf("  %d. %s (score: %d)", i+1, item.Title, item.Score)
 	}
 
+	// Navbar category slugs in display order — each gets 2 articles (7 × 2 = 14, 15th → 1st category)
+	navbarCategorySlugs := []string{
+		"general",
+		"politics",
+		"science-and-technology",
+		"sports-and-entertainment",
+		"business",
+		"world",
+		"defence",
+	}
+
 	created := 0
 	skipped := 0
 
@@ -157,7 +168,9 @@ func runScrape(
 			coverImage = imageUploader.SearchAndUploadImage(item.Title)
 		}
 
-		categoryID := catMapper.GetCategoryID(item.Source)
+		// Round-robin: assign 2 articles per navbar category
+		categoryIndex := (i / 2) % len(navbarCategorySlugs)
+		categoryID := catMapper.GetCategoryIDFromSlug(navbarCategorySlugs[categoryIndex])
 		if categoryID == "" {
 			categoryID = catMapper.GetCategoryIDFromSlug("general")
 		}
