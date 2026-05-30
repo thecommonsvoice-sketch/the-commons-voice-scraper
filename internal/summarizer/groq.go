@@ -86,7 +86,7 @@ func (g *GroqClient) doGenerateSummary(title, description, source string) (strin
 		Messages: []GroqMessage{
 			{
 				Role:    "system",
-				Content: "You are a professional news journalist. Write original, engaging summaries of news stories in your own words. Never copy text from the source. Always write in third person, professional journalism style.",
+				Content: "You are an expert analytical journalist. Write deep, insightful, and completely original news reports in your own words. Never copy text from the source. Structure your articles beautifully with semantic HTML tags: use <h3> for sections, <p> for paragraphs, and occasionally <strong> or list tags (<ul>, <li>) if needed. Always write in third person, professional journalism style, without any meta-talk or introductory conversational filler.",
 			},
 			{
 				Role:    "user",
@@ -94,7 +94,7 @@ func (g *GroqClient) doGenerateSummary(title, description, source string) (strin
 			},
 		},
 		Temperature: 0.7,
-		MaxTokens:   500,
+		MaxTokens:   800,
 	}
 
 	body, err := json.Marshal(request)
@@ -132,32 +132,35 @@ func (g *GroqClient) doGenerateSummary(title, description, source string) (strin
 	}
 
 	summary := groqResp.Choices[0].Message.Content
-	log.Printf("Generated AI summary for: %s", title)
+	log.Printf("Generated analytical AI article for: %s", title)
 
 	return formatAsHTML(summary), nil
 }
 
 func (g *GroqClient) buildPrompt(title, description, source string) string {
-	return fmt.Sprintf(`Write a 300-400 word original news summary based on the following article information. 
-Write it in professional journalism style, in your own words - do NOT copy any text from the original.
+	return fmt.Sprintf(`Write an original, engaging, and deeply informative analytical news article based on the following recent event. Do not write a simple summary; provide analytical depth, context, or broader implications of the development so that it provides immense standalone value to readers.
 
 Article Title: %s
+Description/Excerpt: %s
+Original Source Reference: %s
 
-Article Description/Excerpt: %s
+Please adhere to the following premium journalism structure:
+1. An engaging introduction paragraph explaining the event and its immediate significance.
+2. A section starting with <h3>Key Context & Background</h3> detailing why this event is occurring and what historical or market forces led to it.
+3. A section starting with <h3>Broader Implications & Future Impact</h3> exploring what this means for the industry, society, or region in the medium-to-long term.
+4. Use standard <h3> tags for subheadings, <p> tags for body paragraphs. Do not output markdown style subheadings like "###". Use HTML directly.
+5. Do not include any standard conversational introductory or concluding text (like "Here is the article..."). Start directly with the first paragraph.
 
-Source: %s
-
-Write the summary now:`, title, description, source)
+Length: 450-650 words. Write the entire article in a premium, professional journalism style:`, title, description, source)
 }
 
 func (g *GroqClient) fallbackSummary(title, description, source string) string {
 	summary := fmt.Sprintf(`<p><strong>%s</strong></p>
 <p>%s</p>
-<p>This story was originally reported by %s. The developments mark an important update in ongoing coverage of this topic.</p>
-<p>For more details and the latest updates, readers are encouraged to follow the original source and stay tuned for continued coverage.</p>`,
+<p>This development represents an important update in ongoing coverage. Industry analysts and observers are actively tracking the situation to assess its long-term significance.</p>
+<p>As the situation continues to unfold, further updates and expert perspectives are expected to emerge from verified reporting channels.</p>`,
 		title,
 		truncateText(description, 300),
-		source,
 	)
 
 	return summary
@@ -180,6 +183,13 @@ func formatAsHTML(content string) string {
 			continue
 		}
 
+		// If the AI already structured it using HTML tags (like <h3>, <p>, <ul>, <li>), keep them directly!
+		if strings.HasPrefix(line, "<h3") || strings.HasPrefix(line, "<p") || strings.HasPrefix(line, "<ul") || strings.HasPrefix(line, "<li") || strings.HasPrefix(line, "<strong") || strings.HasPrefix(line, "</") {
+			htmlLines = append(htmlLines, line)
+			continue
+		}
+
+		// Otherwise, escape and wrap in paragraph
 		line = strings.ReplaceAll(line, "&", "&amp;")
 		line = strings.ReplaceAll(line, "<", "&lt;")
 		line = strings.ReplaceAll(line, ">", "&gt;")
