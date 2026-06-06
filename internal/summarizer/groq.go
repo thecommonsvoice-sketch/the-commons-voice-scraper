@@ -177,7 +177,7 @@ func formatAsHTML(content string) string {
 			continue
 		}
 
-		if strings.HasPrefix(line, "<h3") || strings.HasPrefix(line, "<p") || strings.HasPrefix(line, "<ul") || strings.HasPrefix(line, "<li") || strings.HasPrefix(line, "<strong") || strings.HasPrefix(line, "</") {
+		if line[0] == '<' && (line[1] == '/' || (line[1] >= 'a' && line[1] <= 'z') || (line[1] >= 'A' && line[1] <= 'Z')) {
 			htmlLines = append(htmlLines, line)
 			continue
 		}
