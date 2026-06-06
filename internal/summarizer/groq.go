@@ -69,7 +69,7 @@ func (g *GroqClient) GenerateSummary(title, description, source string) (string,
 	}
 
 	prompt := g.buildPrompt(title, description, source)
-	systemMsg := "You are an expert analytical journalist. Write deep, insightful, and completely original news reports in your own words. Never copy text from the source. Structure your articles beautifully with semantic HTML tags: use <h3> for sections, <p> for paragraphs, and occasionally <strong> or list tags (<ul>, <li>) if needed. Always write in third person, professional journalism style, without any meta-talk or introductory conversational filler."
+	systemMsg := "You are an expert analytical journalist. Write deep, insightful, and completely original news reports in your own words. Never copy text from the source. Structure your articles beautifully with HTML tags: use <strong> for section subheadings (not <h3> or other heading tags), <p> for paragraphs, and occasionally <em> or list tags (<ul>, <li>) if needed. Always write in third person, professional journalism style, without any meta-talk or introductory conversational filler."
 
 	models := []string{"llama-3.3-70b-versatile", "llama-3.1-8b-instant"}
 	maxRetries := 3
@@ -159,9 +159,9 @@ Original Source Reference: %s
 
 Please adhere to the following premium journalism structure:
 1. An engaging introduction paragraph explaining the event and its immediate significance.
-2. A section starting with <h3>Key Context & Background</h3> detailing why this event is occurring and what historical or market forces led to it.
-3. A section starting with <h3>Broader Implications & Future Impact</h3> exploring what this means for the industry, society, or region in the medium-to-long term.
-4. Use standard <h3> tags for subheadings, <p> tags for body paragraphs. Do not output markdown style subheadings like "###". Use HTML directly.
+2. A section starting with <strong>Key Context & Background</strong> detailing why this event is occurring and what historical or market forces led to it.
+3. A section starting with <strong>Broader Implications & Future Impact</strong> exploring what this means for the industry, society, or region in the medium-to-long term.
+4. Use <strong> tags for subheadings, <p> tags for body paragraphs. Do not use <h1>, <h2>, <h3>, or any heading tags. Use HTML directly.
 5. Do not include any standard conversational introductory or concluding text (like "Here is the article..."). Start directly with the first paragraph.
 
 Length: 450-650 words. Write the entire article in a premium, professional journalism style:`, title, description, source)
