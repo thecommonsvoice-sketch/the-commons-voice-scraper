@@ -209,9 +209,10 @@ func runScrape(
 		log.Printf("[%d/%d] [%s] Processing: %s", i+1, len(toProcess), ci.slug, item.Title)
 
 		summary, err := summarizer.GenerateSummary(item.Title, item.Description, item.Source)
-		if err != nil {
-			log.Printf("Failed to generate summary: %v", err)
-			summary, _ = summarizer.GenerateSummary(item.Title, "", item.Source)
+		if err != nil || len(summary) < 200 {
+			log.Printf("  Skipping — Groq failed to generate: %v", err)
+			skipped++
+			continue
 		}
 
 		// Try to get image from article page first (og:image)

@@ -7,6 +7,8 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -19,7 +21,7 @@ type GroqClient struct {
 func NewGroqClient(apiKey string) *GroqClient {
 	return &GroqClient{
 		apiKey: apiKey,
-		client: &http.Client{},
+		client: &http.Client{Timeout: 120 * time.Second},
 	}
 }
 
@@ -49,92 +51,103 @@ type GroqResponse struct {
 	} `json:"choices"`
 }
 
-func (g *GroqClient) GenerateSummary(title, description, source string) (string, error) {
-	if g.apiKey == "" {
-		log.Println("No Groq API key - using fallback summarization")
-		return g.fallbackSummary(title, description, source), nil
+func parseRetryAfter(body string) time.Duration {
+	re := regexp.MustCompile(`Please try again in (\d+)ms`)
+	m := re.FindStringSubmatch(body)
+	if len(m) >= 2 {
+		if ms, err := strconv.Atoi(m[1]); err == nil {
+			return time.Duration(ms+500) * time.Millisecond
+		}
 	}
-
-	summary, err := g.doGenerateSummary(title, description, source)
-	if err == nil {
-		return summary, nil
-	}
-
-	// Check if it's a daily token limit (won't recover quickly)
-	if strings.Contains(err.Error(), "tokens per day") {
-		log.Printf("Groq daily token limit reached - using fallback summary")
-		return g.fallbackSummary(title, description, source), nil
-	}
-
-	// Retry once for other rate limits
-	log.Printf("Groq error: %v, retrying once...", err)
-	time.Sleep(2 * time.Second)
-	
-	summary, err = g.doGenerateSummary(title, description, source)
-	if err != nil {
-		return g.fallbackSummary(title, description, source), err
-	}
-
-	return summary, nil
+	return 0
 }
 
-func (g *GroqClient) doGenerateSummary(title, description, source string) (string, error) {
+func (g *GroqClient) GenerateSummary(title, description, source string) (string, error) {
+	if g.apiKey == "" {
+		log.Println("No Groq API key - cannot generate article")
+		return "", fmt.Errorf("no GROQ_API_KEY configured")
+	}
+
 	prompt := g.buildPrompt(title, description, source)
+	systemMsg := "You are an expert analytical journalist. Write deep, insightful, and completely original news reports in your own words. Never copy text from the source. Structure your articles beautifully with semantic HTML tags: use <h3> for sections, <p> for paragraphs, and occasionally <strong> or list tags (<ul>, <li>) if needed. Always write in third person, professional journalism style, without any meta-talk or introductory conversational filler."
 
-	request := GroqRequest{
-		Model: "llama-3.3-70b-versatile",
-		Messages: []GroqMessage{
-			{
-				Role:    "system",
-				Content: "You are an expert analytical journalist. Write deep, insightful, and completely original news reports in your own words. Never copy text from the source. Structure your articles beautifully with semantic HTML tags: use <h3> for sections, <p> for paragraphs, and occasionally <strong> or list tags (<ul>, <li>) if needed. Always write in third person, professional journalism style, without any meta-talk or introductory conversational filler.",
-			},
-			{
-				Role:    "user",
-				Content: prompt,
-			},
-		},
-		Temperature: 0.7,
-		MaxTokens:   800,
+	models := []string{"llama-3.3-70b-versatile", "llama-3.1-8b-instant"}
+	maxRetries := 3
+
+	var lastErr error
+	for mi, model := range models {
+		for attempt := 0; attempt < maxRetries; attempt++ {
+			body, _ := json.Marshal(GroqRequest{
+				Model: model,
+				Messages: []GroqMessage{
+					{Role: "system", Content: systemMsg},
+					{Role: "user", Content: prompt},
+				},
+				Temperature: 0.7,
+				MaxTokens:   1500,
+			})
+
+			req, err := http.NewRequest("POST", "https://api.groq.com/openai/v1/chat/completions", bytes.NewBuffer(body))
+			if err != nil {
+				lastErr = fmt.Errorf("create request: %w", err)
+				continue
+			}
+
+			req.Header.Set("Authorization", "Bearer "+g.apiKey)
+			req.Header.Set("Content-Type", "application/json")
+
+			resp, err := g.client.Do(req)
+			if err != nil {
+				lastErr = fmt.Errorf("request failed: %w", err)
+				time.Sleep(time.Duration(attempt+1) * time.Second)
+				continue
+			}
+
+			if resp.StatusCode == 429 {
+				b, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				wait := parseRetryAfter(string(b))
+				if wait > 0 {
+					log.Printf("  ⏳ Rate limited on %s, waiting %.1fs...", model, wait.Seconds())
+					time.Sleep(wait)
+				} else {
+					time.Sleep(time.Duration(2*(attempt+1)) * time.Second)
+				}
+				lastErr = fmt.Errorf("rate limited: model=%s attempt=%d", model, attempt+1)
+				continue
+			}
+
+			if resp.StatusCode != 200 {
+				b, _ := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				lastErr = fmt.Errorf("Groq API %d: %s", resp.StatusCode, string(b))
+				time.Sleep(time.Second)
+				continue
+			}
+
+			var gr GroqResponse
+			if err := json.NewDecoder(resp.Body).Decode(&gr); err != nil {
+				resp.Body.Close()
+				lastErr = fmt.Errorf("decode: %w", err)
+				continue
+			}
+			resp.Body.Close()
+
+			if len(gr.Choices) == 0 {
+				lastErr = fmt.Errorf("no choices")
+				continue
+			}
+
+			log.Printf("Generated analytical AI article for: %s", title)
+			return formatAsHTML(gr.Choices[0].Message.Content), nil
+		}
+
+		if mi < len(models)-1 {
+			log.Printf("  ↳ %s exhausted, falling back to %s", model, models[mi+1])
+		}
 	}
 
-	body, err := json.Marshal(request)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal request: %w", err)
-	}
-
-	req, err := http.NewRequest("POST", "https://api.groq.com/openai/v1/chat/completions", bytes.NewBuffer(body))
-	if err != nil {
-		return "", fmt.Errorf("failed to create request: %w", err)
-	}
-
-	req.Header.Set("Authorization", "Bearer "+g.apiKey)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := g.client.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		respBody, _ := io.ReadAll(resp.Body)
-		log.Printf("Groq API error: %s", string(respBody))
-		return "", fmt.Errorf("Groq API returned status %d", resp.StatusCode)
-	}
-
-	var groqResp GroqResponse
-	if err := json.NewDecoder(resp.Body).Decode(&groqResp); err != nil {
-		return "", fmt.Errorf("failed to decode response: %w", err)
-	}
-
-	if len(groqResp.Choices) == 0 {
-		return "", fmt.Errorf("no choices in response")
-	}
-
-	summary := groqResp.Choices[0].Message.Content
-	log.Printf("Generated analytical AI article for: %s", title)
-
-	return formatAsHTML(summary), nil
+	return "", fmt.Errorf("all models exhausted: %w", lastErr)
 }
 
 func (g *GroqClient) buildPrompt(title, description, source string) string {
@@ -154,25 +167,6 @@ Please adhere to the following premium journalism structure:
 Length: 450-650 words. Write the entire article in a premium, professional journalism style:`, title, description, source)
 }
 
-func (g *GroqClient) fallbackSummary(title, description, source string) string {
-	summary := fmt.Sprintf(`<p><strong>%s</strong></p>
-<p>%s</p>
-<p>This development represents an important update in ongoing coverage. Industry analysts and observers are actively tracking the situation to assess its long-term significance.</p>
-<p>As the situation continues to unfold, further updates and expert perspectives are expected to emerge from verified reporting channels.</p>`,
-		title,
-		truncateText(description, 300),
-	)
-
-	return summary
-}
-
-func truncateText(text string, maxLen int) string {
-	if len(text) <= maxLen {
-		return text
-	}
-	return text[:maxLen] + "..."
-}
-
 func formatAsHTML(content string) string {
 	lines := strings.Split(content, "\n")
 	var htmlLines []string
@@ -183,13 +177,11 @@ func formatAsHTML(content string) string {
 			continue
 		}
 
-		// If the AI already structured it using HTML tags (like <h3>, <p>, <ul>, <li>), keep them directly!
 		if strings.HasPrefix(line, "<h3") || strings.HasPrefix(line, "<p") || strings.HasPrefix(line, "<ul") || strings.HasPrefix(line, "<li") || strings.HasPrefix(line, "<strong") || strings.HasPrefix(line, "</") {
 			htmlLines = append(htmlLines, line)
 			continue
 		}
 
-		// Otherwise, escape and wrap in paragraph
 		line = strings.ReplaceAll(line, "&", "&amp;")
 		line = strings.ReplaceAll(line, "<", "&lt;")
 		line = strings.ReplaceAll(line, ">", "&gt;")
